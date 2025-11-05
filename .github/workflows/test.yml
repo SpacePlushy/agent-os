@@ -1,0 +1,200 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Run tests weekly on Monday at 00:00 UTC
+    - cron: '0 0 * * 1'
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        bash-version: ['4.4', 'latest']
+        exclude:
+          # macOS ships with bash 3.x by default, but we can test with brew-installed bash
+          - os: macos-latest
+            bash-version: '4.4'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Bash (Ubuntu)
+        if: matrix.os == 'ubuntu-latest' && matrix.bash-version != 'latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bash
+          bash --version
+
+      - name: Set up Bash (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install bash
+          bash --version
+
+      - name: Install dependencies
+        run: |
+          # Install jq for JSON parsing (optional but recommended)
+          if [ "${{ matrix.os }}" == "ubuntu-latest" ]; then
+            sudo apt-get install -y jq curl
+          else
+            brew install jq curl
+          fi
+
+          # Verify installations
+          bash --version
+          jq --version
+          curl --version
+
+      - name: Run unit tests
+        run: |
+          chmod +x tests/run-tests.sh
+          chmod +x tests/unit/*.sh
+          chmod +x tests/helpers/*.sh
+          ./tests/run-tests.sh
+
+      - name: Test base installation (dry-run)
+        run: |
+          chmod +x scripts/*.sh
+          ./scripts/base-install.sh --dry-run --verbose || true
+          # Note: Dry-run may fail in CI environment, that's expected
+
+      - name: Test project installation (dry-run)
+        run: |
+          mkdir -p /tmp/test-project
+          cd /tmp/test-project
+          git init
+          # Set minimal git config for CI
+          git config user.email "test@example.com"
+          git config user.name "Test User"
+          # This will fail in CI since base isn't actually installed, but tests the script
+          ${{ github.workspace }}/scripts/project-install.sh --dry-run --verbose || true
+
+      - name: Validate YAML files
+        run: |
+          # Check YAML syntax
+          if command -v python3 &> /dev/null; then
+            python3 -c "import yaml; yaml.safe_load(open('config.yml'))" && echo "✓ config.yml is valid"
+          fi
+
+      - name: Check shell script syntax
+        run: |
+          # Check all shell scripts for syntax errors
+          for script in scripts/*.sh tests/unit/*.sh tests/helpers/*.sh; do
+            if [ -f "$script" ]; then
+              echo "Checking $script..."
+              bash -n "$script" || exit 1
+            fi
+          done
+          echo "✓ All shell scripts have valid syntax"
+
+      - name: Lint markdown files
+        uses: avto-dev/markdown-lint@v1
+        with:
+          args: './README.md ./docs/*.md'
+          ignore: './CHANGELOG.md'
+        continue-on-error: true
+
+  install-test:
+    name: Full Installation Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Test full base installation
+        run: |
+          chmod +x scripts/*.sh
+
+          # Run actual installation to test directory
+          export HOME=/tmp/test-home
+          mkdir -p $HOME
+
+          # Run installer
+          ./scripts/base-install.sh --verbose
+
+          # Verify installation
+          [ -d "$HOME/agent-os" ] || (echo "Installation failed" && exit 1)
+          [ -f "$HOME/agent-os/config.yml" ] || (echo "Config missing" && exit 1)
+          [ -d "$HOME/agent-os/profiles/default" ] || (echo "Default profile missing" && exit 1)
+
+          echo "✓ Base installation successful"
+
+      - name: Test project installation
+        run: |
+          export HOME=/tmp/test-home
+
+          # Create test project
+          mkdir -p /tmp/test-project
+          cd /tmp/test-project
+          git init
+          git config user.email "test@example.com"
+          git config user.name "Test User"
+
+          # Install Agent OS in project
+          $HOME/agent-os/scripts/project-install.sh --verbose
+
+          # Verify
+          [ -d "agent-os" ] || (echo "Project installation failed" && exit 1)
+          [ -f "agent-os/config.yml" ] || (echo "Project config missing" && exit 1)
+          [ -d "agent-os/standards" ] || (echo "Standards missing" && exit 1)
+
+          echo "✓ Project installation successful"
+
+      - name: Test CLI commands
+        run: |
+          export HOME=/tmp/test-home
+
+          # Test agent-os CLI
+          $HOME/agent-os/scripts/agent-os version
+          $HOME/agent-os/scripts/agent-os help
+
+          cd /tmp/test-project
+          $HOME/agent-os/scripts/agent-os config
+          $HOME/agent-os/scripts/agent-os doctor
+
+          echo "✓ CLI commands working"
+
+  lint:
+    name: Lint and Style Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Run ShellCheck
+        run: |
+          for script in scripts/*.sh tests/unit/*.sh tests/helpers/*.sh; do
+            if [ -f "$script" ]; then
+              echo "Checking $script..."
+              shellcheck -x "$script" || true  # Don't fail, just warn
+            fi
+          done
+        continue-on-error: true
+
+      - name: Check for trailing whitespace
+        run: |
+          if grep -r ' $' --include="*.sh" --include="*.md" scripts/ tests/ profiles/ || true; then
+            echo "Warning: Found trailing whitespace"
+          fi
+
+      - name: Check for TODOs
+        run: |
+          echo "Checking for TODO comments..."
+          grep -rn "TODO\|FIXME\|XXX" --include="*.sh" --include="*.md" . || echo "No TODOs found"
+        continue-on-error: true

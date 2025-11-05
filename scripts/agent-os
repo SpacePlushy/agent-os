@@ -1,0 +1,403 @@
+#!/bin/bash
+
+# =============================================================================
+# Agent OS CLI
+# Convenient command-line interface for Agent OS operations
+# =============================================================================
+
+set -e
+
+# Installation path
+AGENT_OS_HOME="${AGENT_OS_HOME:-$HOME/agent-os}"
+
+# Colors
+BLUE='\033[0;36m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+# -----------------------------------------------------------------------------
+# Utility Functions
+# -----------------------------------------------------------------------------
+
+print_header() {
+    echo -e "${BLUE}$1${NC}"
+}
+
+print_success() {
+    echo -e "${GREEN}✓ $1${NC}"
+}
+
+print_error() {
+    echo -e "${RED}✗ $1${NC}"
+}
+
+print_warning() {
+    echo -e "${YELLOW}⚠️  $1${NC}"
+}
+
+# -----------------------------------------------------------------------------
+# Command Functions
+# -----------------------------------------------------------------------------
+
+cmd_help() {
+    cat << EOF
+Agent OS - Command Line Interface
+
+Usage: agent-os <command> [options]
+
+Commands:
+  init              Install Agent OS in current project
+  update            Update Agent OS in current project
+  config            Show configuration
+  doctor            Diagnose installation issues
+  profile list      List available profiles
+  profile show      Show details of a profile
+  profile new       Create new custom profile
+  version           Show Agent OS version
+  help              Show this help message
+
+Examples:
+  agent-os init                    # Install in current project
+  agent-os init --profile rails    # Install with Rails profile
+  agent-os update                  # Update current project
+  agent-os config                  # Show configuration
+  agent-os doctor                  # Check installation health
+  agent-os profile list            # List profiles
+  agent-os profile new             # Create custom profile
+
+For more information, visit: https://buildermethods.com/agent-os
+EOF
+}
+
+cmd_version() {
+    if [[ -f "$AGENT_OS_HOME/config.yml" ]]; then
+        local version=$(grep "^version:" "$AGENT_OS_HOME/config.yml" | sed 's/version: *//')
+        echo "Agent OS version $version"
+    else
+        print_error "Agent OS not found at $AGENT_OS_HOME"
+        echo "Run: curl -fsSL https://raw.githubusercontent.com/buildermethods/agent-os/main/scripts/base-install.sh | bash"
+        exit 1
+    fi
+}
+
+cmd_init() {
+    print_header "Initializing Agent OS in current project"
+    echo ""
+
+    # Check if Agent OS base is installed
+    if [[ ! -d "$AGENT_OS_HOME" ]]; then
+        print_error "Agent OS base installation not found"
+        echo ""
+        echo "Please install Agent OS first:"
+        echo "  curl -fsSL https://raw.githubusercontent.com/buildermethods/agent-os/main/scripts/base-install.sh | bash"
+        exit 1
+    fi
+
+    # Check if already installed
+    if [[ -d "agent-os" ]]; then
+        print_warning "Agent OS already installed in this project"
+        read -p "Reinstall? (y/N): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 0
+        fi
+        "$AGENT_OS_HOME/scripts/project-install.sh" --re-install "$@"
+    else
+        "$AGENT_OS_HOME/scripts/project-install.sh" "$@"
+    fi
+}
+
+cmd_update() {
+    print_header "Updating Agent OS"
+    echo ""
+
+    # Check if installed in project
+    if [[ ! -d "agent-os" ]]; then
+        print_error "Agent OS not installed in current project"
+        echo "Run: agent-os init"
+        exit 1
+    fi
+
+    "$AGENT_OS_HOME/scripts/project-update.sh" "$@"
+}
+
+cmd_config() {
+    print_header "Agent OS Configuration"
+    echo ""
+
+    # Base configuration
+    if [[ -f "$AGENT_OS_HOME/config.yml" ]]; then
+        echo "Base Configuration ($AGENT_OS_HOME/config.yml):"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        grep -v '^#' "$AGENT_OS_HOME/config.yml" | grep -v '^$'
+        echo ""
+    else
+        print_error "Base configuration not found"
+    fi
+
+    # Project configuration
+    if [[ -f "agent-os/config.yml" ]]; then
+        echo "Project Configuration (./agent-os/config.yml):"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        cat "agent-os/config.yml"
+    else
+        echo "No project configuration (not installed in this directory)"
+    fi
+}
+
+cmd_doctor() {
+    print_header "Agent OS Health Check"
+    echo ""
+
+    local issues=0
+
+    # Check base installation
+    echo "Checking base installation..."
+    if [[ -d "$AGENT_OS_HOME" ]]; then
+        print_success "Base installation found at $AGENT_OS_HOME"
+
+        # Check version
+        if [[ -f "$AGENT_OS_HOME/config.yml" ]]; then
+            local version=$(grep "^version:" "$AGENT_OS_HOME/config.yml" | sed 's/version: *//')
+            print_success "Version: $version"
+        else
+            print_error "config.yml not found"
+            ((issues++))
+        fi
+
+        # Check scripts
+        if [[ -f "$AGENT_OS_HOME/scripts/project-install.sh" ]]; then
+            print_success "Installation scripts found"
+        else
+            print_error "Installation scripts missing"
+            ((issues++))
+        fi
+
+        # Check profiles
+        if [[ -d "$AGENT_OS_HOME/profiles/default" ]]; then
+            print_success "Default profile found"
+        else
+            print_error "Default profile missing"
+            ((issues++))
+        fi
+    else
+        print_error "Base installation not found at $AGENT_OS_HOME"
+        ((issues++))
+    fi
+
+    echo ""
+
+    # Check project installation
+    echo "Checking project installation..."
+    if [[ -d "agent-os" ]]; then
+        print_success "Project installation found"
+
+        # Check config
+        if [[ -f "agent-os/config.yml" ]]; then
+            print_success "Project configuration found"
+        else
+            print_error "Project configuration missing"
+            ((issues++))
+        fi
+
+        # Check standards
+        if [[ -d "agent-os/standards" ]]; then
+            local standard_count=$(find agent-os/standards -name "*.md" | wc -l)
+            print_success "Standards found ($standard_count files)"
+        else
+            print_warning "No standards directory"
+        fi
+
+        # Check Claude Code integration
+        if [[ -d ".claude/commands/agent-os" ]]; then
+            local cmd_count=$(ls .claude/commands/agent-os/*.md 2>/dev/null | wc -l)
+            print_success "Claude Code commands installed ($cmd_count commands)"
+        else
+            echo "  Claude Code commands not installed (may be disabled)"
+        fi
+
+        if [[ -d ".claude/agents/agent-os" ]]; then
+            local agent_count=$(ls .claude/agents/agent-os/*.md 2>/dev/null | wc -l)
+            print_success "Claude Code agents installed ($agent_count agents)"
+        else
+            echo "  Claude Code agents not installed (may be disabled)"
+        fi
+    else
+        echo "  Not installed in current project (this is OK if not intended)"
+    fi
+
+    echo ""
+
+    # Check prerequisites
+    echo "Checking prerequisites..."
+
+    if command -v curl &> /dev/null; then
+        print_success "curl installed"
+    else
+        print_error "curl not found (required for installation)"
+        ((issues++))
+    fi
+
+    if command -v git &> /dev/null; then
+        print_success "git installed"
+    else
+        print_warning "git not found (recommended but not required)"
+    fi
+
+    if command -v jq &> /dev/null; then
+        print_success "jq installed"
+    else
+        echo "  jq not found (optional, improves JSON parsing)"
+    fi
+
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    if [[ $issues -eq 0 ]]; then
+        print_success "All checks passed!"
+    else
+        print_warning "Found $issues issue(s)"
+        echo ""
+        echo "To fix issues:"
+        echo "  - Reinstall base: curl -fsSL https://raw.githubusercontent.com/buildermethods/agent-os/main/scripts/base-install.sh | bash"
+        echo "  - Reinstall project: agent-os init --re-install"
+    fi
+}
+
+cmd_profile_list() {
+    print_header "Available Profiles"
+    echo ""
+
+    if [[ ! -d "$AGENT_OS_HOME/profiles" ]]; then
+        print_error "Profiles directory not found"
+        exit 1
+    fi
+
+    for profile_dir in "$AGENT_OS_HOME/profiles"/*; do
+        if [[ -d "$profile_dir" ]]; then
+            local profile_name=$(basename "$profile_dir")
+            echo "• $profile_name"
+
+            # Count files
+            local agent_count=$(find "$profile_dir/agents" -name "*.md" 2>/dev/null | wc -l)
+            local standard_count=$(find "$profile_dir/standards" -name "*.md" 2>/dev/null | wc -l)
+            local workflow_count=$(find "$profile_dir/workflows" -name "*.md" 2>/dev/null | wc -l)
+
+            echo "  Agents: $agent_count, Standards: $standard_count, Workflows: $workflow_count"
+        fi
+    done
+
+    echo ""
+    echo "Use 'agent-os profile show <name>' for details"
+}
+
+cmd_profile_show() {
+    local profile_name="$1"
+
+    if [[ -z "$profile_name" ]]; then
+        print_error "Profile name required"
+        echo "Usage: agent-os profile show <profile-name>"
+        exit 1
+    fi
+
+    local profile_dir="$AGENT_OS_HOME/profiles/$profile_name"
+
+    if [[ ! -d "$profile_dir" ]]; then
+        print_error "Profile not found: $profile_name"
+        exit 1
+    fi
+
+    print_header "Profile: $profile_name"
+    echo ""
+
+    # Agents
+    if [[ -d "$profile_dir/agents" ]]; then
+        echo "Agents:"
+        find "$profile_dir/agents" -name "*.md" -exec basename {} .md \; | sed 's/^/  - /'
+        echo ""
+    fi
+
+    # Standards
+    if [[ -d "$profile_dir/standards" ]]; then
+        echo "Standards:"
+        find "$profile_dir/standards" -name "*.md" | sed "s|$profile_dir/standards/||" | sed 's/^/  - /'
+        echo ""
+    fi
+
+    # Commands
+    if [[ -d "$profile_dir/commands" ]]; then
+        echo "Commands:"
+        ls "$profile_dir/commands" | sed 's/^/  - /'
+        echo ""
+    fi
+}
+
+cmd_profile_new() {
+    "$AGENT_OS_HOME/scripts/create-profile.sh" "$@"
+}
+
+# -----------------------------------------------------------------------------
+# Main
+# -----------------------------------------------------------------------------
+
+main() {
+    # Check for no arguments
+    if [[ $# -eq 0 ]]; then
+        cmd_help
+        exit 0
+    fi
+
+    # Parse command
+    case "$1" in
+        init)
+            shift
+            cmd_init "$@"
+            ;;
+        update)
+            shift
+            cmd_update "$@"
+            ;;
+        config)
+            cmd_config
+            ;;
+        doctor)
+            cmd_doctor
+            ;;
+        profile)
+            case "$2" in
+                list)
+                    cmd_profile_list
+                    ;;
+                show)
+                    shift 2
+                    cmd_profile_show "$@"
+                    ;;
+                new)
+                    shift 2
+                    cmd_profile_new "$@"
+                    ;;
+                *)
+                    print_error "Unknown profile command: $2"
+                    echo "Available: list, show, new"
+                    exit 1
+                    ;;
+            esac
+            ;;
+        version|-v|--version)
+            cmd_version
+            ;;
+        help|-h|--help)
+            cmd_help
+            ;;
+        *)
+            print_error "Unknown command: $1"
+            echo ""
+            cmd_help
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
